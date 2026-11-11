@@ -1,0 +1,56 @@
+name: Build plugin
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the Spotube gradle plugin
+        run: |
+          git clone --depth 1 https://github.com/team-spotube/gradle-plugin.git spotube-gradle-plugin
+          cd spotube-gradle-plugin
+          chmod +x ./gradlew
+          ./gradlew publishToMavenLocal
+
+      - name: Build plugin
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :spotube_plugin_lossless:packageProductionPlugin --stacktrace
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(sed -n '/spotubePlugin {/,/}/ { s/.*version = "\(.*\)"/\1/p }' spotube_plugin_lossless/build.gradle.kts | head -1)
+          echo "prop=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Prepare release asset
+        run: cp spotube_plugin_lossless/build/distributions/plugin-production.smplug plugin.smplug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin
+          path: plugin.smplug
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.prop }}
+          name: ${{ steps.version.outputs.prop }}
+          files: plugin.smplug
+          fail_on_unmatched_files: true
