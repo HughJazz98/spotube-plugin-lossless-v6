@@ -13,7 +13,7 @@ plugins {
 
 spotubePlugin {
     name = "Lossless Sources v6"
-    version = "0.1.0"
+    version = "0.1.1"
     apiVersion = "0.1.0"
     description = "Lossless FLAC for Spotube 6: plays each track from Monochrome (or a working Tidal hifi-api server) using a source list that is re-checked every hour. No account, nothing to set up. Set Playback > streaming format to FLAC."
     author = "HughJazz98"

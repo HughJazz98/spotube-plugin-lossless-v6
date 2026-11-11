@@ -46,27 +46,35 @@ class RealAudioAPI(net: Net, private val store: SourceStore) : AudioAPI {
 
     override suspend fun getStreamsByTrack(track: MetadataTrack): List<AudioSource> {
         if (track.title.isBlank()) return emptyList()
-        val query = searchText(track)
+        val queries = searchTexts(track)
         for ((src, bases) in basesByType()) {
-            val found = runCatching { src.matches(track, query, bases) }.getOrElse { emptyList() }
-            val fitting = plausible(found, track).filter { sameLength(it, track) }
-            if (fitting.isEmpty()) continue
-            logger.i { "'${track.title}': ${fitting.size} match(es) on ${src.type}" }
-            return fitting.take(5).mapIndexed { i, m ->
-                AudioSource.Basic(
-                    id = "${m.source}|${m.ref}|${m.durationMs}",
-                    title = m.title,
-                    artist = m.artists.joinToString(", ").ifBlank { null },
-                    album = m.album,
-                    thumbnails = m.artwork?.let { listOf(Thumbnail(url = it, width = 640, height = 640)) }.orEmpty(),
-                    externalUri = m.externalUri,
-                    confidence = if (i == 0) 0.95f else 0.8f,
-                )
+            for (query in queries) {
+                val found = runCatching { src.matches(track, query, bases) }.getOrElse { emptyList() }
+                val fitting = plausible(found, track).filter { sameLength(it, track) }
+                if (fitting.isEmpty()) {
+                    logger.i { "'${track.title}': nothing fitting on ${src.type} for \"$query\" (${found.size} results)" }
+                    continue
+                }
+                logger.i { "'${track.title}': ${fitting.size} match(es) on ${src.type} for \"$query\"" }
+                return toSources(fitting)
             }
         }
         logger.w { "'${track.title}': no lossless source has it" }
         return emptyList()
     }
+
+    private fun toSources(fitting: List<Match>): List<AudioSource> =
+        fitting.take(5).mapIndexed { i, m ->
+            AudioSource.Basic(
+                id = "${m.source}|${m.ref}|${m.durationMs}",
+                title = m.title,
+                artist = m.artists.joinToString(", ").ifBlank { null },
+                album = m.album,
+                thumbnails = m.artwork?.let { listOf(Thumbnail(url = it, width = 640, height = 640)) }.orEmpty(),
+                externalUri = m.externalUri,
+                confidence = if (i == 0) 0.95f else 0.8f,
+            )
+        }
 
     override suspend fun getStreamsOfAudioSource(source: AudioSource.Basic): List<AudioSource.Streamed> {
         val parts = source.id.split("|")

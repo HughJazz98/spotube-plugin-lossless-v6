@@ -35,19 +35,48 @@ fun simplify(value: String?): String {
     return lower.filter { KEEP.indexOf(it) >= 0 }.trim().split(" ").filter { it.isNotEmpty() }.joinToString(" ")
 }
 
+/** A real artist name: some metadata plugins put the track length ("5:16") where the artist goes. */
+fun realName(name: String?): Boolean {
+    if (name.isNullOrBlank()) return false
+    val t = name.trim()
+    if (t.all { it.isDigit() || it == ':' || it == '.' || it == ' ' }) return false
+    return true
+}
+
+/** The track's artists, falling back to the album's artists when the track's own are missing or bogus. */
+fun artistNames(track: MetadataTrack): List<String> {
+    val own = track.artists.map { it.name }.filter { realName(it) }
+    if (own.isNotEmpty()) return own
+    return track.album?.artists?.map { it.name }?.filter { realName(it) }.orEmpty()
+}
+
+/** Same song title: equal once simplified, or one starts with the other ("Walk" / "Walk (Remastered)"). */
+fun sameTitle(a: String, b: String): Boolean {
+    val x = simplify(a)
+    val y = simplify(b)
+    if (x.isEmpty() || y.isEmpty()) return false
+    return x == y || x.startsWith("$y ") || y.startsWith("$x ")
+}
+
 /**
- * Keeps results that are really this track: an exact ISRC hit always counts, anything else must be
- * credited to one of the track's artists (searches return covers next to the original). ISRC hits go first.
+ * Keeps results that are really this track: an exact ISRC hit always counts; otherwise it must be
+ * credited to one of the track's artists (searches return covers next to the original). When the
+ * metadata has no usable artist, the title has to match instead. ISRC hits go first.
  */
 fun plausible(found: List<Match>, track: MetadataTrack): List<Match> {
-    val wanted = track.artists.map { simplify(it.name) }.filter { it.isNotEmpty() }
+    val wanted = artistNames(track).map { simplify(it) }.filter { it.isNotEmpty() }
     val isrc = track.isrcCode?.uppercase()?.takeIf { it.isNotBlank() }
     val exact = found.filter { isrc != null && it.isrc?.uppercase() == isrc }
-    val credited = found.filter { m ->
-        m !in exact && (wanted.isEmpty() || m.artists.any { credit ->
-            val c = simplify(credit)
-            c.isNotEmpty() && wanted.any { w -> c.contains(w) || w.contains(c) }
-        })
+    val rest = found.filter { it !in exact }
+    val credited = if (wanted.isEmpty()) {
+        rest.filter { sameTitle(it.title, track.title) }
+    } else {
+        rest.filter { m ->
+            m.artists.any { credit ->
+                val c = simplify(credit)
+                c.isNotEmpty() && wanted.any { w -> c.contains(w) || w.contains(c) }
+            }
+        }
     }
     return exact + credited
 }
@@ -67,7 +96,13 @@ fun sameLength(m: Match, track: MetadataTrack): Boolean {
     return gap <= slack
 }
 
-fun searchText(track: MetadataTrack): String {
-    val names = track.artists.map { it.name }.filter { it.isNotBlank() }
-    return if (names.isEmpty()) track.title else "${track.title} ${names.joinToString(", ")}"
+/** What to search for, best first: "title artists", then "title album", then the title alone. */
+fun searchTexts(track: MetadataTrack): List<String> {
+    val out = mutableListOf<String>()
+    val names = artistNames(track)
+    if (names.isNotEmpty()) out.add("${track.title} ${names.joinToString(", ")}")
+    val album = track.album?.title
+    if (!album.isNullOrBlank() && !sameTitle(album, track.title)) out.add("${track.title} $album")
+    out.add(track.title)
+    return out.distinct()
 }
