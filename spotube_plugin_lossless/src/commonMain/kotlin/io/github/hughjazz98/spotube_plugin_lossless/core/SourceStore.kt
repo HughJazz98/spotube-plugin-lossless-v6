@@ -1,7 +1,6 @@
 package io.github.hughjazz98.spotube_plugin_lossless.core
 
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import org.spotube.plugin_interfaces.host_apis.PersistedStorageAPI
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -53,33 +52,55 @@ class SourceStore(private val net: Net, private val storage: PersistedStorageAPI
 
     private fun encodeList(list: List<Source>) = list.joinToString(",") { "${it.type}=${it.base}" }
 
-    suspend fun resolve(): List<Source> = lock.withLock {
-        val mem = cached
-        if (mem != null && now() - cachedAt < CACHE_TTL_MS) return@withLock mem
+    suspend fun resolve(): List<Source> {
+        lock.lock()
+        try {
+            return load()
+        } finally {
+            lock.unlock()
+        }
+    }
 
-        val saved = runCatching { storage.getString(CACHE_KEY) }.getOrNull()
+    // Kept free of returns from inside lambdas / try blocks: Zipline's QuickJS (2021) can't compile some of those.
+    private suspend fun load(): List<Source> {
+        val mem = cached
+        if (mem != null && now() - cachedAt < CACHE_TTL_MS) return mem
+
+        val saved: String? = try { storage.getString(CACHE_KEY) } catch (e: Throwable) { null }
         val parts = saved?.split("|", limit = 2)
         val savedAt = parts?.getOrNull(0)?.toLongOrNull() ?: 0L
         val savedList = parts?.getOrNull(1)?.let { decode(it) }.orEmpty()
-        if (savedList.isNotEmpty() && now() - savedAt in 0 until CACHE_TTL_MS) {
-            return@withLock merge(savedList).also { cached = it; cachedAt = savedAt }
+        val age = now() - savedAt
+        if (savedList.isNotEmpty() && age >= 0 && age < CACHE_TTL_MS) {
+            val fromCache = merge(savedList)
+            cached = fromCache
+            cachedAt = savedAt
+            return fromCache
         }
 
-        val remote = net.getJson(REMOTE_URL)["sources"].arr()?.mapNotNull { e ->
-            val type = e["type"].str()
-            val base = e["base"].str()
-            if (type != null && base != null) Source(type, base) else null
-        }.orEmpty()
-
-        val list = when {
-            remote.isNotEmpty() -> merge(remote).also {
-                runCatching { storage.putString(CACHE_KEY, "${now()}|${encodeList(it)}") }
-            }
-            savedList.isNotEmpty() -> merge(savedList)       // GitHub unreachable: an old list beats none
-            else -> merge(emptyList())
+        val remote = readRemote()
+        val list: List<Source>
+        if (remote.isNotEmpty()) {
+            list = merge(remote)
+            try { storage.putString(CACHE_KEY, "${now()}|${encodeList(list)}") } catch (e: Throwable) { }
+        } else if (savedList.isNotEmpty()) {
+            list = merge(savedList)                         // GitHub unreachable: an old list beats none
+        } else {
+            list = merge(emptyList())
         }
         cached = list
         cachedAt = now()
-        list
+        return list
+    }
+
+    private suspend fun readRemote(): List<Source> {
+        val items = net.getJson(REMOTE_URL)["sources"].arr() ?: return emptyList()
+        val out = mutableListOf<Source>()
+        for (e in items) {
+            val type = e["type"].str()
+            val base = e["base"].str()
+            if (type != null && base != null) out.add(Source(type, base))
+        }
+        return out
     }
 }

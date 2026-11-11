@@ -58,13 +58,13 @@ class HifiApi(private val net: Net) : LosslessSource {
     }
 
     @OptIn(ExperimentalEncodingApi::class)
-    private fun decode(manifest: String): Pair<String, String>? = runCatching {
-        val text = Base64.decode(manifest).decodeToString()
-        val parsed = net.parse(text)
-        val url = parsed["urls"].arr()?.firstOrNull().str() ?: return null
+    private fun decode(manifest: String): Pair<String, String>? {
+        val text: String? = try { Base64.decode(manifest).decodeToString() } catch (e: Throwable) { null }
+        val parsed = if (text == null) null else net.parse(text)
+        val url = parsed["urls"].arr()?.firstOrNull().str()
         val codec = parsed["codecs"].str() ?: ""
-        url to codec
-    }.getOrNull()
+        return if (url == null) null else Pair(url, codec)
+    }
 
     override suspend fun streams(ref: String, durationMs: Long, bases: List<String>): List<AudioStream> {
         val out = mutableListOf<AudioStream>()
